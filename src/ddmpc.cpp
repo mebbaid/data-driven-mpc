@@ -1,495 +1,319 @@
+// data-driven-mpc.cpp
 #include "data-driven-mpc.h"
-#include "osqp-solver.h"
+#include <QpSolversEigen/QpSolversEigen.hpp>
+#include <iostream>
+#include <deque> // Include deque
 
-#include <iostream> // For debugging (optional, can be removed later)
-#include <cstdlib>  // For std::rand
+namespace DataDrivenMPC {
 
-#include <osqp.h>
-#include <types.h>
-#include <util.h>
+DDMPC::DDMPC(int horizonLength, int predictionHorizon, int controlHorizon,
+             const Eigen::MatrixXd& Q, const Eigen::MatrixXd& R, QPSolver* solver)
+    : m_horizonLength(horizonLength), m_predictionHorizon(predictionHorizon),
+      m_controlHorizon(controlHorizon), m_Q(Q), m_R(R), m_solver(solver) {
 
-namespace DataDrivenMPC
+    if (m_controlHorizon > m_predictionHorizon) {
+        throw std::invalid_argument("Control horizon (M) cannot be greater than the prediction horizon (N).");
+    }
+    if (Q.rows() != Q.cols() || Q.rows() != predictionHorizon)
+    {
+        throw std::invalid_argument("Q matrix has the incorrect dimensions. It must me diagonal and N x N, where N is the prediction horizon");
+    }
+    if (R.rows() != R.cols() || R.rows() != controlHorizon)
+    {
+        throw std::invalid_argument("R matrix has the incorrect dimensions. It must me diagonal and M x M, where M is the control horizon");
+    }
+    if (!m_solver) {
+        throw std::invalid_argument("Solver cannot be a null pointer.");
+    }
+
+    // Set up the solver.
+    m_solver->instantiateSolver("osqp"); // Or "proxqp", etc.
+    m_solver->setBooleanParameter("warm_starting", true); // Enable warm-starting
+
+}
+
+void DDMPC::setInputConstraints(const Eigen::VectorXd& u_min, const Eigen::VectorXd& u_max) {
+    m_uMin = u_min;
+    m_uMax = u_max;
+    m_useInputConstraints = true;
+}
+
+void DDMPC::setDeltaInputConstraints(const Eigen::VectorXd& delta_u_min, const Eigen::VectorXd& delta_u_max)
 {
+    m_deltaUmin = delta_u_min;
+    m_deltaUmax = delta_u_max;
+    m_useDeltaInputConstraints = true;
+}
 
-    DDMPC::DDMPC(int horizonLength, int predictionHorizon, int controlHorizon,
-                 const Eigen::MatrixXd &Q, const Eigen::MatrixXd &R, QPSolver *solver)
-        : m_horizonLength(horizonLength), m_predictionHorizon(predictionHorizon),
-          m_controlHorizon(controlHorizon), m_Q(Q), m_R(R), m_solver(solver)
+void DDMPC::setOutputConstraints(const Eigen::VectorXd& y_min, const Eigen::VectorXd& y_max) {
+    m_yMin = y_min;
+    m_yMax = y_max;
+    m_useOutputConstraints = true;
+}
+
+void DDMPC::updateWeights(const Eigen::MatrixXd& Q, const Eigen::MatrixXd& R)
+{
+    if (Q.rows() != Q.cols() || Q.rows() != m_predictionHorizon)
     {
-
-        if (horizonLength <= 0 || predictionHorizon <= 0 || controlHorizon <= 0)
-        {
-            throw std::invalid_argument("Horizons must be positive.");
-        }
-        if (controlHorizon > predictionHorizon)
-        {
-            throw std::invalid_argument("Control horizon cannot be greater than prediction horizon.");
-        }
-        // We assume Q and R are diagonal, only the diagonal is relevant for the cost.
-        if (Q.rows() != Q.cols())
-        { // Q and R must be square
-            throw std::invalid_argument("Q matrix has incorrect dimensions.");
-        }
-        if (R.rows() != R.cols())
-        {
-            throw std::invalid_argument("R matrix has incorrect dimensions.");
-        }
-        if (!solver)
-        {
-            throw std::invalid_argument("QP solver pointer cannot be null.");
-        }
+        throw std::invalid_argument("Q matrix has the incorrect dimensions. It must me diagonal and N x N, where N is the prediction horizon");
+    }
+    if (R.rows() != R.cols() || R.rows() != m_controlHorizon)
+    {
+        throw std::invalid_argument("R matrix has the incorrect dimensions. It must me diagonal and M x M, where M is the control horizon");
     }
 
-    void DDMPC::setInputConstraints(const Eigen::VectorXd &u_min, const Eigen::VectorXd &u_max)
-    {
-        if (u_min.size() != u_max.size())
-        {
-            throw std::invalid_argument("Input contraint vectors (u_min and u_max) must have the same dimension");
-        }
+    // Update the weight matrices
+    m_Q = Q;
+    m_R = R;
+}
 
-        m_uMin = u_min;
-        m_uMax = u_max;
-        m_useInputConstraints = true;
+void DDMPC::checkInputData(const std::vector<Eigen::VectorXd>& u_data, const std::vector<Eigen::VectorXd>& y_data) const {
+    if (u_data.empty() || y_data.empty()) {
+        throw std::invalid_argument("Input/output data vectors cannot be empty.");
     }
 
-    void DDMPC::setDeltaInputConstraints(const Eigen::VectorXd &delta_u_min, const Eigen::VectorXd &delta_u_max)
+    if (u_data.size() != y_data.size())
     {
-        if (delta_u_min.size() != delta_u_max.size())
-        {
-            throw std::invalid_argument("Input contraint vectors (delta_u_min and delta_u_max) must have the same dimension");
-        }
-
-        m_deltaUmin = delta_u_min;
-        m_deltaUmax = delta_u_max;
-        m_useDeltaInputConstraints = true;
+        throw std::invalid_argument("Input and output data must be the same length.");
     }
 
-    void DDMPC::setOutputConstraints(const Eigen::VectorXd &y_min, const Eigen::VectorXd &y_max)
-    {
-
-        if (y_min.size() != y_max.size())
-        {
-            throw std::invalid_argument("Output contraint vectors (y_min and y_max) must have the same dimension");
-        }
-
-        m_yMin = y_min;
-        m_yMax = y_max;
-        m_useOutputConstraints = true;
+    if (u_data.size() < static_cast<size_t>(m_horizonLength)) {
+        throw std::invalid_argument("Insufficient data for the given horizon length.");
     }
 
-    void DDMPC::updateWeights(const Eigen::MatrixXd &Q, const Eigen::MatrixXd &R)
+    int u_dim = u_data[0].size();
+    int y_dim = y_data[0].size();
+
+    // Check the dimensions of each element
+    for (size_t i = 0; i < u_data.size(); ++i)
     {
-        if (Q.rows() != Q.cols() || Q.rows() != m_Q.rows())
+        if (u_data[i].size() != u_dim)
         {
-            throw std::invalid_argument("Q matrix has incorrect dimensions.");
+            throw std::invalid_argument("Inconsistent dimensions in input data at index " + std::to_string(i) + ".");
         }
-        if (R.rows() != R.cols() || R.rows() != m_R.rows())
+        if (y_data[i].size() != y_dim)
         {
-            throw std::invalid_argument("R matrix has incorrect dimensions.");
-        }
-
-        m_Q = Q;
-        m_R = R;
-    }
-
-    Eigen::VectorXd DDMPC::solve(const std::vector<Eigen::VectorXd> &u_data,
-                                 const std::vector<Eigen::VectorXd> &y_data,
-                                 const Eigen::VectorXd &reference,
-                                 const Eigen::VectorXd &u_prev)
-    {
-        // Check input data
-        checkInputData(u_data, y_data);
-
-        // Check reference
-        if (reference.size() != m_predictionHorizon * y_data[0].size()) // Use y_data to get outputDim
-        {
-            throw std::invalid_argument("Reference vector has incorrect dimensions. Expected " + std::to_string(m_predictionHorizon * y_data[0].size()) + " got " + std::to_string(reference.size()));
-        }
-
-        // Construct Hankel matrices
-        DataDrivenMPC::HankelMatrix Hu(u_data, m_horizonLength);
-        DataDrivenMPC::HankelMatrix Hy(y_data, m_horizonLength);
-
-        // Prepare past input/output vectors (up, yp)
-        //  up is the stacked vector of the past L inputs
-        //  yp is the stacked vector of the past L outputs
-        int inputDim = u_data[0].rows();
-        int outputDim = y_data[0].rows();
-        Eigen::VectorXd up(m_horizonLength * inputDim);
-        Eigen::VectorXd yp(m_horizonLength * outputDim);
-
-        for (int i = 0; i < m_horizonLength; ++i)
-        {
-            up.segment(i * inputDim, inputDim) = u_data[u_data.size() - m_horizonLength + i];
-            yp.segment(i * outputDim, outputDim) = y_data[y_data.size() - m_horizonLength + i];
-        }
-
-        // --- Build and solve the optimization problem ---
-
-        // ------ OSQP Setup (Moved here) ------
-        int n = Hu.cols();             // Number of variables (size of g)
-        int m = up.rows() + yp.rows(); // Number of equality constraints
-        // Cast the solver to the derived class OSQPSolver
-        DataDrivenMPC::OSQPSolver *osqp_solver = dynamic_cast<DataDrivenMPC::OSQPSolver *>(m_solver);
-        if (osqp_solver == nullptr)
-        {
-            throw std::runtime_error("Error: Solver provided is not an OSQPSolver instance");
-        }
-        // OSQP setup (moved from OSQPSolver)
-        OSQPData *data = (OSQPData *)malloc(sizeof(OSQPData));
-        if (!data)
-        {
-            throw std::runtime_error("Failed to allocate OSQPData.");
-        }
-        data->n = n;
-        data->m = m;
-        data->P = (csc *)malloc(sizeof(csc));
-        data->A = (csc *)malloc(sizeof(csc));
-        data->q = (double *)malloc(sizeof(double) * n);
-        data->l = (double *)malloc(sizeof(double) * m);
-        data->u = (double *)malloc(sizeof(double) * m);
-
-        if (!data->P || !data->A || !data->q || !data->l || !data->u)
-        {
-            free(data->P);
-            free(data->q);
-            free(data->A);
-            free(data->l);
-            free(data->u);
-            free(data);
-            throw std::runtime_error("Failed to allocate memory for OSQP data.");
-        }
-        data->P->m = n;
-        data->P->n = n;
-        data->P->nzmax = n * n;
-        data->P->x = (double *)malloc(sizeof(double) * data->P->nzmax);
-        data->P->i = (c_int *)malloc(sizeof(c_int) * data->P->nzmax);
-        data->P->p = (c_int *)malloc(sizeof(c_int) * (n + 1));
-
-        if (!data->P->x || !data->P->i || !data->P->p)
-        {
-            free(data->P->x);
-            free(data->P->i);
-            free(data->P->p);
-            free(data->P);
-            free(data->q);
-            free(data->A);
-            free(data->l);
-            free(data->u);
-            free(data);
-
-            throw std::runtime_error("Failed to allocate memory for OSQP P data.");
-        }
-
-        data->A->m = m;
-        data->A->n = n;
-        data->A->nzmax = n * m;
-        data->A->x = (double *)malloc(sizeof(double) * data->A->nzmax);
-        data->A->i = (c_int *)malloc(sizeof(c_int) * data->A->nzmax);
-        data->A->p = (c_int *)malloc(sizeof(c_int) * (n + 1));
-
-        if (!data->A->x || !data->A->i || !data->A->p)
-        {
-            free(data->P->x);
-            free(data->P->i);
-            free(data->P->p);
-            free(data->P);
-
-            free(data->q);
-
-            free(data->A->x);
-            free(data->A->i);
-            free(data->A->p);
-            free(data->A);
-
-            free(data->l);
-            free(data->u);
-            free(data);
-            throw std::runtime_error("Failed to allocate memory for OSQP A data.");
-        }
-        OSQPSettings *settings = (OSQPSettings *)malloc(sizeof(OSQPSettings));
-        if (settings)
-        {
-            osqp_set_default_settings(settings);
-            settings->verbose = 0; // Disable verbose output
-        }
-        else
-        {
-            free(data->P->x);
-            free(data->P->i);
-            free(data->P->p);
-            free(data->P);
-            free(data->q);
-            free(data->A->x);
-            free(data->A->i);
-            free(data->A->p);
-            free(data->A);
-            free(data->l);
-            free(data->u);
-            free(data);
-            throw std::runtime_error("Failed to allocate memory for settings.");
-        }
-
-        // Setup workspace (after allocating ALL data)
-        OSQPWorkspace *work = nullptr; // Temporary workspace pointer
-        if (::osqp_setup(&work, data, settings) != 0)
-        { // Use ::osqp_setup
-            free(settings);
-            // Free data if setup fails.  Use standard free, not freeProblemData.
-            free(data->P->x);
-            free(data->P->i);
-            free(data->P->p);
-            free(data->P);
-            free(data->q);
-            free(data->A->x);
-            free(data->A->i);
-            free(data->A->p);
-            free(data->A);
-            free(data->l);
-            free(data->u);
-            free(data);
-            throw std::runtime_error("Failed to set up OSQP workspace.");
-        }
-        free(settings); // Settings can be freed after the setup
-        // Store the workspace in the solver. From now, the solver is responsible for the workspace
-        osqp_solver->setWorkspace(work); // Use dynamic_cast to access setWorkspace
-        osqp_solver->setData(data);      // Use dynamic_cast to access setData
-
-        // -----------
-
-        // 1.  Declare the optimization variable g
-        Eigen::VectorXd g_optimal;
-
-        // 2.  Build the optimization problem (set up matrices and vectors for the QP solver)
-        buildOptimizationProblem(Hu.getMatrix(), Hy.getMatrix(), up, yp, reference, u_prev, g_optimal);
-
-        // 3. Extract the optimal control input (first element of u_f)
-        Eigen::VectorXd u_optimal(inputDim);
-        // Optimal control input is obtained from the first `inputDim` elements of `Hu * g_optimal`
-        u_optimal = (Hu.getMatrix() * g_optimal).head(inputDim);
-
-        return u_optimal;
-    }
-
-    void DDMPC::buildOptimizationProblem(const Eigen::MatrixXd &Hu, const Eigen::MatrixXd &Hy,
-                                         const Eigen::VectorXd &up, const Eigen::VectorXd &yp,
-                                         const Eigen::VectorXd &reference, const Eigen::VectorXd &u_prev,
-                                         Eigen::VectorXd &g_optimal)
-    {
-
-        // --- Build the matrices for the QP problem ---
-
-        // Get dimensions
-        int inputDim = up.rows() / m_horizonLength;
-        int outputDim = yp.rows() / m_horizonLength;
-        int n_g = Hu.cols(); // Number of columns in Hankel matrices (size of g)
-
-        // --- Cost Function ---
-
-        // P (Hessian)
-        Eigen::MatrixXd P = Eigen::MatrixXd::Zero(n_g, n_g);
-
-        // Create block diagonal Q_block and R_block
-        // Q_block now uses m_horizonLength (L), NOT m_predictionHorizon (N)
-        Eigen::MatrixXd Q_block = Eigen::MatrixXd::Zero(m_horizonLength * outputDim, m_horizonLength * outputDim);
-        for (int i = 0; i < m_horizonLength; ++i)
-        {
-            Q_block.block(i * outputDim, i * outputDim, outputDim, outputDim) = m_Q;
-        }
-        Eigen::MatrixXd R_block = Eigen::MatrixXd::Zero(m_controlHorizon * inputDim, m_controlHorizon * inputDim);
-        for (int i = 0; i < m_controlHorizon; ++i)
-        {
-            R_block.block(i * inputDim, i * inputDim, inputDim, inputDim) = m_R;
-        }
-
-        // Compute H_u_delta
-        Eigen::MatrixXd Hu_delta(m_controlHorizon * inputDim, n_g);
-        // We have [Hu(1,:); Hu(2,:)-Hu(1,:), ..., Hu(M,:)-Hu(M-1,:)] * g
-        // First block is just the first input
-        Hu_delta.block(0, 0, inputDim, n_g) = Hu.block(0, 0, inputDim, n_g);
-        // Other blocks are differences of control inputs
-        for (int i = 1; i < m_controlHorizon; i++)
-        {
-            Hu_delta.block(i * inputDim, 0, inputDim, n_g) =
-                Hu.block(i * inputDim, 0, inputDim, n_g) - Hu.block((i - 1) * inputDim, 0, inputDim, n_g);
-        }
-
-        // std::cout << "R_block dimensions: " << R_block.rows() << " x " << R_block.cols() << std::endl;
-        P = Hy.transpose() * Q_block * Hy + Hu_delta.transpose() * R_block * Hu_delta;
-        P = 2 * P; // Multiply by 2 because the QP solver expects 0.5*x'Px + q'x
-
-        // q (Gradient)
-        // take the first L elements of the reference
-        Eigen::VectorXd q = -2 * Hy.transpose() * Q_block * reference.head(m_horizonLength * outputDim);
-
-        // --- Constraints ---
-
-        // Equality constraints:  Ag = b
-        // [ Hu ] [ g ] = [ up ]
-        // [ Hy ]       = [ yp ]
-
-        Eigen::MatrixXd A = Eigen::MatrixXd::Zero(up.rows() + yp.rows(), n_g);
-        A.topRows(up.rows()) = Hu;
-        A.bottomRows(yp.rows()) = Hy;
-        Eigen::VectorXd b = Eigen::VectorXd::Zero(up.rows() + yp.rows());
-        b.head(up.rows()) = up;
-        b.tail(yp.rows()) = yp;
-
-        // Inequality constraints:  l <= Cx <= u
-        // We have several optional constraints:
-        // Input constraints
-        // Output constraints
-        // Delta Input constraints
-        std::vector<Eigen::MatrixXd> C_vec;
-        std::vector<Eigen::VectorXd> l_vec;
-        std::vector<Eigen::VectorXd> u_vec;
-
-        if (m_useInputConstraints)
-        {
-            // u_min <= Hu * g <= u_max   for the first M blocks (control horizon)
-            Eigen::MatrixXd C_u = Eigen::MatrixXd::Zero(m_controlHorizon * inputDim, n_g);
-            for (int i = 0; i < m_controlHorizon; ++i)
-            {
-                C_u.block(i * inputDim, 0, inputDim, n_g) = Hu.block(i * inputDim, 0, inputDim, n_g);
-            }
-            C_vec.push_back(C_u);
-            l_vec.push_back(m_uMin.replicate(m_controlHorizon, 1)); // Stack u_min M times
-            u_vec.push_back(m_uMax.replicate(m_controlHorizon, 1)); // Stack u_max M times
-        }
-
-        if (m_useOutputConstraints)
-        {
-            // y_min <= Hy * g <= y_max  for the first N blocks (prediction horizon)
-            Eigen::MatrixXd C_y = Eigen::MatrixXd::Zero(m_predictionHorizon * outputDim, n_g);
-            for (int i = 0; i < m_predictionHorizon; i++)
-            {
-                C_y.block(i * outputDim, 0, outputDim, n_g) = Hy.block(i * outputDim, 0, outputDim, n_g);
-            }
-            C_vec.push_back(C_y);
-            l_vec.push_back(m_yMin.replicate(m_predictionHorizon, 1)); // Stack y_min N times
-            u_vec.push_back(m_yMax.replicate(m_predictionHorizon, 1)); // Stack y_max N times
-        }
-
-        if (m_useDeltaInputConstraints)
-        {
-            // delta_u_min <= delta_u <= delta_u_max
-            //  delta_u = [ u(k) - u(k-1); u(k+1) - u(k); ...; u(k+M-1) - u(k+M-2) ]
-            //            = [ Hu(1,:)*g - u(k-1);  Hu(2,:)*g - Hu(1,:)*g; ...; Hu(M,:)*g - Hu(M-1,:)*g ]
-            Eigen::MatrixXd C_delta_u = Eigen::MatrixXd::Zero(m_controlHorizon * inputDim, n_g);
-
-            // First block:  u(k) - u(k-1)
-            C_delta_u.block(0, 0, inputDim, n_g) = Hu.block(0, 0, inputDim, n_g);
-            Eigen::VectorXd l_delta_u_first_block = m_deltaUmin;
-            Eigen::VectorXd u_delta_u_first_block = m_deltaUmax;
-            for (int i = 0; i < inputDim; ++i)
-            {
-                l_delta_u_first_block(i) += -u_prev(i); //  -u(k-1)
-                u_delta_u_first_block(i) += -u_prev(i); //  -u(k-1)
-            }
-
-            // Remaining blocks: u(k+i) - u(k+i-1)
-            for (int i = 1; i < m_controlHorizon; ++i)
-            {
-                C_delta_u.block(i * inputDim, 0, inputDim, n_g) = Hu.block(i * inputDim, 0, inputDim, n_g) - Hu.block((i - 1) * inputDim, 0, inputDim, n_g);
-            }
-
-            C_vec.push_back(C_delta_u);
-            // adjust and stack
-            Eigen::VectorXd l_delta_u(m_controlHorizon * inputDim);
-            Eigen::VectorXd u_delta_u(m_controlHorizon * inputDim);
-            l_delta_u.head(inputDim) = l_delta_u_first_block;
-            u_delta_u.head(inputDim) = u_delta_u_first_block;
-            l_delta_u.tail((m_controlHorizon - 1) * inputDim) = m_deltaUmin.replicate(m_controlHorizon - 1, 1); // Stack delta_u_min (M-1) times
-            u_delta_u.tail((m_controlHorizon - 1) * inputDim) = m_deltaUmax.replicate(m_controlHorizon - 1, 1); // Stack delta_u_max (M-1) times
-            l_vec.push_back(l_delta_u);
-            u_vec.push_back(u_delta_u);
-        }
-
-        // Concatenate all inequality constraints
-        Eigen::MatrixXd C;
-        Eigen::VectorXd l, u;
-
-        if (C_vec.size() > 0) // Only if there is at least one constraint
-        {
-            int totalRows = 0;
-            for (const auto &matrix : C_vec)
-            {
-                totalRows += matrix.rows();
-            }
-            C.resize(totalRows, n_g);
-            l.resize(totalRows);
-            u.resize(totalRows);
-
-            int currentRow = 0;
-            for (size_t i = 0; i < C_vec.size(); ++i)
-            {
-                C.block(currentRow, 0, C_vec[i].rows(), n_g) = C_vec[i];
-                l.segment(currentRow, l_vec[i].size()) = l_vec[i];
-                u.segment(currentRow, u_vec[i].size()) = u_vec[i];
-                currentRow += C_vec[i].rows();
-            }
-            // m_solver->setInequalityConstraints(C, l, u);
-        }
-        else // No inequality constraints
-        {
-            std::cout << "No inequality constraints! is this correct ?" << std::endl;
-            int eq_constraints_size = A.rows();
-
-            C.resize(0, n_g);
-            l.resize(0);
-            u.resize(0);
-            // m_solver->setInequalityConstraints(C, l, u);
-        }
-
-        // --- Call the QP solver ---
-        m_solver->setObjective(P, q);
-        m_solver->setEqualityConstraints(A, b);
-        if (C_vec.size() > 0)
-        { // Only call if there are inequality constraints
-            m_solver->setInequalityConstraints(C, l, u);
-        }
-
-        bool solverSuccess = m_solver->solve(g_optimal); // Solve the QP
-
-        if (!solverSuccess)
-        {
-            throw std::runtime_error("QP solver failed.");
+            throw std::invalid_argument("Inconsistent dimensions in output data at index " + std::to_string(i) + ".");
         }
     }
+}
+Eigen::VectorXd DDMPC::solve(const std::vector<Eigen::VectorXd>& u_data_vec,
+                              const std::vector<Eigen::VectorXd>& y_data_vec,
+                              const Eigen::VectorXd& reference,
+                              const Eigen::VectorXd& u_prev) {
 
-    void DDMPC::checkInputData(const std::vector<Eigen::VectorXd> &u_data, const std::vector<Eigen::VectorXd> &y_data) const
-    {
-        if (u_data.size() < static_cast<size_t>(m_horizonLength))
-        {
-            throw std::invalid_argument("Insufficient input data for the given horizon length. Expected at least " +
-                                        std::to_string(m_horizonLength) + " samples, but got " +
-                                        std::to_string(u_data.size()) + ".");
-        }
-
-        if (y_data.size() < static_cast<size_t>(m_horizonLength))
-        {
-            throw std::invalid_argument("Insufficient output data for the given horizon length.  Expected at least " +
-                                        std::to_string(m_horizonLength) + " samples, but got " +
-                                        std::to_string(y_data.size()) + ".");
-        }
-
-        // Check if dimensions are consistent
-        int inputDim = u_data[0].rows();
-        int outputDim = y_data[0].rows();
-        for (size_t i = 1; i < u_data.size(); ++i)
-        {
-            if (u_data[i].rows() != inputDim)
-            {
-                throw std::invalid_argument("Inconsistent input vector dimensions across the data sequence.");
-            }
-        }
-        for (size_t i = 1; i < y_data.size(); ++i)
-        {
-            if (y_data[i].rows() != outputDim)
-            {
-                throw std::invalid_argument("Inconsistent output vector dimensions across the data sequence.");
-            }
-        }
+     if (reference.size() != m_predictionHorizon) {
+        throw std::invalid_argument("Reference vector size does not match the prediction horizon.");
     }
 
+    std::deque<Eigen::VectorXd> u_data(u_data_vec.begin(), u_data_vec.end());
+    std::deque<Eigen::VectorXd> y_data(y_data_vec.begin(), y_data_vec.end());
+
+    HankelMatrix Hu(std::vector<Eigen::VectorXd>(u_data.begin(), u_data.end()), m_horizonLength);
+    HankelMatrix Hy(std::vector<Eigen::VectorXd>(y_data.begin(), y_data.end()), m_horizonLength);
+
+    int u_dim = u_data[0].size();
+    int y_dim = y_data[0].size();
+    Eigen::VectorXd up = Hu.getMatrix().col(Hu.cols() - 1);
+    Eigen::VectorXd yp = Hy.getMatrix().col(Hy.cols() - 1);
+
+    int excitation_order = m_horizonLength * u_dim;
+    if (!Hu.isPersistentlyExciting(excitation_order)) {
+        std::cerr << "Warning: Input data may not be persistently exciting." << std::endl;
+        std::cerr << "Hu rows: " << Hu.rows() << ", Hu cols: " << Hu.cols() << std::endl;
+    }
+
+    int num_g = u_data_vec.size() - m_horizonLength + 1; //CORRECT CALCULATION OF NUM_G
+    Eigen::SparseMatrix<double> H(num_g, num_g);
+    Eigen::MatrixXd f(num_g, 1); // Corrected initialization
+    buildOptimizationProblem(Hu.getMatrix(), Hy.getMatrix(), up, yp, reference, u_prev, H, f);
+
+    // --- Constraints ---
+    int eq_constraints_size = (m_horizonLength + m_predictionHorizon) * (u_dim + y_dim);
+    int total_constraints_rows = eq_constraints_size;
+
+    if (m_useInputConstraints) {
+       total_constraints_rows += m_controlHorizon * u_dim;
+    }
+    if (m_useOutputConstraints) {
+        total_constraints_rows += m_predictionHorizon * y_dim;
+    }
+    if (m_useDeltaInputConstraints) {
+        total_constraints_rows += m_controlHorizon * u_dim;
+    }
+
+    // Declare DENSE matrices for building constraints
+    Eigen::MatrixXd A_dense(total_constraints_rows, num_g);
+    Eigen::VectorXd lower_bound_dense(total_constraints_rows);
+    Eigen::VectorXd upper_bound_dense(total_constraints_rows);
+    A_dense.setZero(); // Initialize to zero
+
+    // --- Equality Constraints (a) ---
+    Eigen::MatrixXd combined_hankel(Hu.rows() + Hy.rows(), Hu.cols());
+    combined_hankel << Hu.getMatrix(), Hy.getMatrix();
+
+    A_dense.block(0, 0, eq_constraints_size, num_g) = combined_hankel.block(0, 0, eq_constraints_size, num_g);
+    lower_bound_dense.head(eq_constraints_size) = combined_hankel.col(combined_hankel.cols() - 1).head(eq_constraints_size);
+    upper_bound_dense.head(eq_constraints_size) = combined_hankel.col(combined_hankel.cols() - 1).head(eq_constraints_size);
+
+
+    int constraint_row_index = eq_constraints_size;
+
+    // --- Input Constraints (b) ---
+    if (m_useInputConstraints) {
+        Eigen::MatrixXd U(m_controlHorizon * u_dim, num_g);
+        U.setZero();
+        Eigen::MatrixXd Up = Hu.getMatrix().block((m_horizonLength-m_controlHorizon) * u_dim, 0, m_controlHorizon * u_dim,  Hu.cols() );
+        U.noalias() = Up;
+
+        A_dense.block(constraint_row_index, 0, m_controlHorizon*u_dim, num_g) = U;
+        for (int i = 0; i < m_controlHorizon * u_dim; ++i)
+        {
+           lower_bound_dense(constraint_row_index + i) = m_uMin(i % u_dim);
+           upper_bound_dense(constraint_row_index + i) = m_uMax(i % u_dim);
+        }
+
+        constraint_row_index += m_controlHorizon * u_dim;
+    }
+
+    // --- Output Constraints (c) ---
+    if (m_useOutputConstraints) {
+        Eigen::MatrixXd Y(m_predictionHorizon * y_dim, num_g);
+        Y.setZero();
+        Eigen::MatrixXd Yf = Hy.getMatrix().block((m_horizonLength - m_predictionHorizon) * y_dim, 0, m_predictionHorizon * y_dim, Hy.cols());
+        Y.noalias() = Yf;
+
+        A_dense.block(constraint_row_index, 0, m_predictionHorizon*y_dim, num_g) = Y;
+
+        for (int i = 0; i < m_predictionHorizon * y_dim; ++i)
+        {
+             lower_bound_dense(constraint_row_index + i) = m_yMin(i % y_dim);
+            upper_bound_dense(constraint_row_index + i) = m_yMax(i % y_dim);
+        }
+        constraint_row_index += m_predictionHorizon * y_dim;
+    }
+
+    // --- Delta Input Constraints ---
+    if (m_useDeltaInputConstraints)
+    {
+        Eigen::MatrixXd U(m_controlHorizon * u_dim, num_g);
+        U.setZero();
+        Eigen::MatrixXd Up = Hu.getMatrix().block((m_horizonLength- m_controlHorizon) * u_dim, 0, m_controlHorizon * u_dim, Hu.cols());
+        U.noalias() = Up;
+
+        for (int i = 0; i < m_controlHorizon * u_dim; i += u_dim)
+        {
+           for (int j = 0; j < num_g; ++j)
+            {
+                double value = U(i, j);
+                if (i >= u_dim)
+                {
+                    value -= U(i - u_dim, j);
+                }
+                else
+                {
+                    value -= up(up.rows() - u_dim + (i % u_dim));
+                }
+                A_dense(constraint_row_index + i, j) = value;
+
+
+                value = U(i + 1, j);
+                if (i >= u_dim)
+                {
+                    value -= U(i + 1 - u_dim, j);
+                }
+                else
+                {
+                    value -= up(up.rows() - u_dim + ((i + 1) % u_dim));
+                }
+                A_dense(constraint_row_index + i+1, j) = value; // Corrected index
+
+            }
+
+            for (int k = 0; k < u_dim; k++)
+            {
+                lower_bound_dense(constraint_row_index + i + k) = m_deltaUmin(k);
+                upper_bound_dense(constraint_row_index + i + k) = m_deltaUmax(k);
+            }
+        }
+        constraint_row_index += m_controlHorizon * u_dim;
+    }
+
+    // Convert A_dense to sparse A (AFTER building constraints)
+    Eigen::SparseMatrix<double> A = A_dense.sparseView();
+
+
+    // --- Solve the QP ---
+    m_solver->setNumberOfVariables(num_g);
+    m_solver->setNumberOfConstraints(total_constraints_rows);
+    m_solver->setHessianMatrix(H);
+    m_solver->setGradient(f);
+    m_solver->setLinearConstraintsMatrix(A);
+    m_solver->setLowerBound(lower_bound_dense);
+    m_solver->setUpperBound(upper_bound_dense);
+
+    if (!m_solver->initSolver()) {
+        throw std::runtime_error("Failed to initialize QP solver.");
+    }
+
+    if (m_solver->solveProblem() != QpSolversEigen::ErrorExitFlag::NoError) {
+        throw std::runtime_error("QP solver failed to find a solution.");
+    }
+
+    Eigen::VectorXd g_optimal = m_solver->getSolution();
+    Eigen::MatrixXd U_first(u_dim, num_g);
+    U_first.setZero();
+    // Get the first block of Uf
+    U_first.noalias() = Hu.getMatrix().block((m_horizonLength - 1) * u_dim, 0, u_dim, Hu.cols());
+    Eigen::VectorXd u_first = U_first * g_optimal;
+
+    return u_first;
+}
+void DDMPC::buildOptimizationProblem(const Eigen::MatrixXd& Hu, const Eigen::MatrixXd& Hy,
+                                     const Eigen::VectorXd& up, const Eigen::VectorXd& yp,
+                                     const Eigen::VectorXd& reference, const Eigen::VectorXd& u_prev,
+                                     Eigen::SparseMatrix<double>& H,
+                                     Eigen::MatrixXd& f)
+{
+    int u_dim = up.size() / m_horizonLength;
+    int y_dim = yp.size() / m_horizonLength;
+    int num_g = Hu.cols();
+
+    // Construct Yf and Uf.
+    Eigen::MatrixXd Yf(m_predictionHorizon * y_dim, num_g);
+    Eigen::MatrixXd Uf(m_controlHorizon * u_dim, num_g);
+    Yf.setZero();
+    Uf.setZero();
+
+    // Extract Yf and Uf_complete.
+    Yf.noalias() = Hy.block((m_horizonLength - m_predictionHorizon) * y_dim, 0, m_predictionHorizon * y_dim, num_g);
+    Eigen::MatrixXd Uf_complete = Hu.block((m_horizonLength - m_predictionHorizon) * u_dim, 0, m_predictionHorizon * u_dim, num_g);
+    Uf.noalias() = Uf_complete.block(0, 0, m_controlHorizon * u_dim, num_g);
+
+    // Expand Q and R.
+    Eigen::MatrixXd Q_expanded(m_predictionHorizon * y_dim, m_predictionHorizon * y_dim);
+    Eigen::MatrixXd R_expanded(m_controlHorizon * u_dim, m_controlHorizon * u_dim);
+    Q_expanded.setZero();
+    R_expanded.setZero();
+    for (int i = 0; i < m_predictionHorizon; ++i) {
+        Q_expanded.block(i * y_dim, i * y_dim, y_dim, y_dim) = m_Q;
+    }
+    for (int i = 0; i < m_controlHorizon; ++i) {
+        R_expanded.block(i * u_dim, i * u_dim, u_dim, u_dim) = m_R;
+    }
+
+    // Construct H and f (dense, then convert H to sparse).
+    Eigen::MatrixXd H_dense = Yf.transpose() * Q_expanded * Yf + Uf.transpose() * R_expanded * Uf;
+    // Correctly expand the reference vector.
+    Eigen::VectorXd ref_expanded = reference.replicate(y_dim, 1);
+
+    f = -2 * Yf.transpose() * Q_expanded * ref_expanded; //correct way of expanding
+
+    // Convert to Sparse (THIS IS THE KEY FIX)
+    H = H_dense.sparseView();
+    // Print dimensions for debugging
+    std::cout << "Yf dimensions: " << Yf.rows() << " x " << Yf.cols() << std::endl;
+    std::cout << "Uf dimensions: " << Uf.rows() << " x " << Uf.cols() << std::endl;
+    std::cout << "H_dense dimensions: " << H_dense.rows() << " x " << H_dense.cols() << std::endl;
+}
 } // namespace DataDrivenMPC

@@ -1,15 +1,17 @@
+// data-driven-mpc.h
 #ifndef DATA_DRIVEN_MPC_H
 #define DATA_DRIVEN_MPC_H
 
 #include <Eigen/Dense>  // For linear algebra
 #include <vector>
 #include <stdexcept>
-
+#include <QpSolversEigen/QpSolversEigen.hpp>
 
 namespace DataDrivenMPC {
 
+typedef QpSolversEigen::Solver QPSolver;
+
 // Forward declaration of a QP solver interface (implementation details later)
-class QPSolver;
 
 /**
  * @brief Class to represent and manipulate Hankel matrices.
@@ -66,8 +68,6 @@ private:
     int m_horizonLength;             // The horizon length (L)
 };
 
-
-
 class DDMPC {
 public:
     /**
@@ -96,7 +96,6 @@ public:
      *  @param delta_u_max Upper bound on the delta control input (Eigen::VectorXd)
      */
     void setDeltaInputConstraints(const Eigen::VectorXd& delta_u_min, const Eigen::VectorXd& delta_u_max);
-
 
     /**
      * @brief Sets the output constraints.
@@ -135,7 +134,7 @@ private:
     int m_controlHorizon;
     Eigen::MatrixXd m_Q;
     Eigen::MatrixXd m_R;
-    QPSolver* m_solver;   // Pointer to the QP solver
+    QPSolver* m_solver;
 
     // Constraints (optional)
     bool m_useInputConstraints = false;
@@ -152,7 +151,8 @@ private:
     void buildOptimizationProblem(const Eigen::MatrixXd& Hu, const Eigen::MatrixXd& Hy,
                                  const Eigen::VectorXd& up, const Eigen::VectorXd& yp,
                                  const Eigen::VectorXd& reference, const Eigen::VectorXd& u_prev,
-                                 Eigen::VectorXd& g_optimal); // Example - you'll need more parameters for your QP solver
+                                 Eigen::SparseMatrix<double>& H,
+                                 Eigen::MatrixXd& f); //pass by reference
     void checkInputData(const std::vector<Eigen::VectorXd>& u_data, const std::vector<Eigen::VectorXd>& y_data) const;
 };
 

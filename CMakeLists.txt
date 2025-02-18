@@ -7,8 +7,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
 find_package(Eigen3 REQUIRED)
-find_package(osqp REQUIRED)
-
+find_package(QpSolversEigen REQUIRED)
 
 include_directories(
     ${CMAKE_CURRENT_SOURCE_DIR}/include
@@ -19,12 +18,11 @@ include_directories(
 add_library(data-driven-mpc STATIC
     src/ddmpc.cpp
     src/hankel-matrix.cpp
-    src/osqp-solver.cpp
 )
 
 target_link_libraries(data-driven-mpc
         Eigen3::Eigen
-        osqp::osqp
+        QpSolversEigen::QpSolversEigen
 )
 
 add_executable(simpleExample examples/simpleExample.cpp)
@@ -38,7 +36,6 @@ target_include_directories(simpleExample
     PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/include
         ${EIGEN3_INCLUDE_DIR}
-        ${OSQP_INCLUDE_DIRS}
 )
 
 # Optional: Create an install target

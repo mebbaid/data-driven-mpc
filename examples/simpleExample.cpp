@@ -1,104 +1,99 @@
-#include <iostream>
-#include <ctime>
-#include <vector>
-#include <cstdlib>
-
-#include <Eigen/Dense>
+//main.cpp
+// In main.cpp
 #include "data-driven-mpc.h"
-#include "osqp-solver.h"
+#include <QpSolversEigen/QpSolversEigen.hpp>
+#include <iostream>
+#include <random>
+#include <deque>
 
+using namespace DataDrivenMPC;
 
 int main() {
-    // --- System Parameters (Double Integrator) ---
-    double dt = 0.1;  // Sampling time
-    Eigen::MatrixXd A(2, 2);
-    A << 1, dt,
-         0, 1;
-    Eigen::VectorXd B(2);
-    B << 0.5 * dt * dt,
-         dt;
-    Eigen::MatrixXd C(1, 2);
-    C << 1, 0;
+    try {
+        // --- System Parameters ---
+        int horizonLength = 5;      // L
+        int predictionHorizon = 3;  // N
+        int controlHorizon = 2;    // M
+        int u_dim = 1;
+        int y_dim = 1;
 
-    // --- Data Generation ---
-    int T = 100;  // Length of data collection
-    std::vector<Eigen::VectorXd> u_data;
-    std::vector<Eigen::VectorXd> y_data;
-    Eigen::VectorXd x(2);
-    x.setZero();  // Initial state
+        // --- Calculate Minimum Data Length (T) ---
+        int min_data_length = horizonLength + (horizonLength + predictionHorizon - 1) * (u_dim + y_dim) - 1;
+        int T = min_data_length + 50;  // Add extra data
 
-    // Generate persistently exciting input (PRBS)
-    std::srand(static_cast<unsigned int>(std::time(nullptr))); // Seed the random number generator
-    for (int k = 0; k < T; ++k) {
-        // Generate a random input (-1 or 1) for a PRBS signal
-        double u_val = (std::rand() % 2 == 0) ? -1.0 : 1.0;
-        Eigen::VectorXd u(1);
-        u << u_val;
-        u_data.push_back(u);
+        // --- Generate Data ---
+        std::vector<Eigen::VectorXd> u_data_vec;  // Use vectors for initial data generation
+        std::vector<Eigen::VectorXd> y_data_vec;
 
-        // Simulate the system
-        x = A * x + B * u_val;
-        Eigen::VectorXd y = C * x;
-        y_data.push_back(y);
+        // PRBS Generation
+        std::random_device rd;
+        std::mt19937 gen(rd());
+        std::bernoulli_distribution dist(0.5);
+        for (int i = 0; i < T; ++i) {
+            Eigen::VectorXd u(u_dim);
+            u << (dist(gen) ? 1.0 : -1.0);
+            u_data_vec.push_back(u);  // Push onto the vector
+
+            Eigen::VectorXd y(y_dim);
+            if (i == 0) {
+                y << 0.0;
+            } else {
+                y = 0.8 * y_data_vec.back() + 0.5 * u_data_vec[i - 1];
+            }
+            y_data_vec.push_back(y); // Push onto the vector
+        }
+
+        // construct Hankel matrices to check
+        HankelMatrix Hu(u_data_vec, horizonLength);
+        HankelMatrix Hy(y_data_vec, horizonLength);
+        std::cout << "Hu dimensions: " << Hu.rows() << " x " << Hu.cols() << std::endl;
+        std::cout << "Hy dimensions: " << Hy.rows() << " x " << Hy.cols() << std::endl;
+        // --- DDMPC Setup ---
+        Eigen::MatrixXd Q(predictionHorizon, predictionHorizon);
+        Q.setIdentity();
+        Q *= 10;
+        Eigen::MatrixXd R(controlHorizon, controlHorizon);
+        R.setIdentity();
+        R *= 0.1;
+
+        QpSolversEigen::Solver* solver = new QpSolversEigen::Solver;
+
+        DDMPC controller(horizonLength, predictionHorizon, controlHorizon, Q, R, solver);
+
+        // --- Set Constraints (Optional) ---
+        Eigen::VectorXd u_min(u_dim);
+        u_min << -2.0;
+        Eigen::VectorXd u_max(u_dim);
+        u_max << 2.0;
+        controller.setInputConstraints(u_min, u_max);
+
+        Eigen::VectorXd y_min(y_dim);
+        y_min << -5.0;
+        Eigen::VectorXd y_max(y_dim);
+        y_max << 5.0;
+
+        controller.setOutputConstraints(y_min, y_max);
+
+        Eigen::VectorXd delta_u_min(u_dim);
+        delta_u_min << -1.0;
+        Eigen::VectorXd delta_u_max(u_dim);
+        delta_u_max << 1.0;
+        controller.setDeltaInputConstraints(delta_u_min, delta_u_max);
+
+        // --- Solve DDMPC ---
+        Eigen::VectorXd reference(predictionHorizon * y_dim);
+        reference.setZero();
+        Eigen::VectorXd u_prev(u_dim);
+        u_prev.setZero();
+
+        Eigen::VectorXd u = controller.solve(u_data_vec, y_data_vec, reference, u_prev);
+        std::cout << "Control input: " << u.transpose() << std::endl;
+
+        delete solver;
+    } catch (const std::exception& e) {
+        std::cerr << "Error: " << e.what() << std::endl;
+        return 1;
     }
-
-     // --- DDMPC Setup ---
-    int L = 10;  // Hankel matrix horizon length
-    int N = 15;  // Prediction horizon
-    int M = 5;   // Control horizon
-    int inputDim = u_data[0].size();
-    int outputDim = y_data[0].size();
-    Eigen::MatrixXd Q = Eigen::MatrixXd::Identity(outputDim, outputDim);  // Output weight
-    Eigen::MatrixXd R = 0.1 * Eigen::MatrixXd::Identity(inputDim, inputDim); // Input weight
-
-    // // check persistance of excitation
-    // DataDrivenMPC::HankelMatrix check(u_data, L);
-    // if (!check.isPersistentlyExciting(L, 1e-6)) {
-    //     std::cerr << "Data is not persistently exciting of order 2." << std::endl;
-    //     return 1;
-    // }
-
-
-    // Create OSQP solver instance
-    DataDrivenMPC::QPSolver* solver = new DataDrivenMPC::OSQPSolver();
-
-    // Create DDPC controller instance
-    DataDrivenMPC::DDMPC controller(L, N, M, Q, R, solver);
-
-    // --- Control Loop ---
-    int control_iterations = 50;
-    Eigen::VectorXd u_prev(1);
-    u_prev.setZero();  // Initialize previous input
-
-    Eigen::VectorXd reference(outputDim * N); // TODO: is this the needed orrect size: outputDim * N
-    for (int i = 0; i < N; ++i) {
-        reference.segment(i * outputDim, outputDim) << 1.0; // Set each output to 1.0
-    }
-
-    std::cout << "Starting control loop...\n";
-    for (int k = 0; k < control_iterations; ++k) {
-
-        // Get the optimal control input from DDPC
-        Eigen::VectorXd u_optimal = controller.solve(u_data, y_data, reference, u_prev);
-
-        // Apply the control input to the *real* system (simulated here)
-        x = A * x + B * u_optimal(0);
-        Eigen::VectorXd y = C * x;  // Measure the output
-
-        // Store data for next iteration (rolling window)
-        u_data.push_back(u_optimal);
-        y_data.push_back(y);
-        u_prev = u_optimal;  // Update previous input
-
-        // Print results (optional)
-        std::cout << "k=" << k << ", u=" << u_optimal(0) << ", y=" << y(0) << std::endl;
-        // Remove the oldest data point to maintain a constant window size
-        u_data.erase(u_data.begin());
-        y_data.erase(y_data.begin());
-    }
-
-    // Clean up
-    delete solver;
 
     return 0;
 }
