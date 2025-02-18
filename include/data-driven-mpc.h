@@ -1,4 +1,4 @@
-// data-driven-mpc.h
+//data-driven-mpc.h
 #ifndef DATA_DRIVEN_MPC_H
 #define DATA_DRIVEN_MPC_H
 
@@ -7,9 +7,10 @@
 #include <stdexcept>
 #include <QpSolversEigen/QpSolversEigen.hpp>
 
+
 namespace DataDrivenMPC {
 
-typedef QpSolversEigen::Solver QPSolver;
+    typedef QpSolversEigen::Solver QPSolver;
 
 // Forward declaration of a QP solver interface (implementation details later)
 
@@ -68,6 +69,8 @@ private:
     int m_horizonLength;             // The horizon length (L)
 };
 
+
+
 class DDMPC {
 public:
     /**
@@ -96,6 +99,7 @@ public:
      *  @param delta_u_max Upper bound on the delta control input (Eigen::VectorXd)
      */
     void setDeltaInputConstraints(const Eigen::VectorXd& delta_u_min, const Eigen::VectorXd& delta_u_max);
+
 
     /**
      * @brief Sets the output constraints.
