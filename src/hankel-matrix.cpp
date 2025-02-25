@@ -69,7 +69,6 @@ namespace DataDrivenMPC
                 count++;
             }
         }
-
         return count >= order;
     }
 
