@@ -1,51 +1,30 @@
-cmake_minimum_required(VERSION 3.10)
-project(data-driven-mpc)
+cmake_minimum_required(VERSION 3.15)
+project(DataDrivenMPC LANGUAGES CXX)
 
-# Set C++ standard
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
 find_package(Eigen3 REQUIRED)
-find_package(osqp REQUIRED)
+find_package(QpSolversEigen REQUIRED)
 
+option(ENABLE_EXAMPLES "Enable examples" OFF)
+option(ENABLE_TESTING "Enable testing" OFF)
+option(ENABLE_PYTHON "Enable Python bindings" OFF)
 
-include_directories(
-    ${CMAKE_CURRENT_SOURCE_DIR}/include
-    ${EIGEN3_INCLUDE_DIR}
-    ${OSQP_INCLUDE_DIRS}
-)
+# if python or examples, find python
+if(ENABLE_PYTHON OR ENABLE_EXAMPLES)
+    find_package(Python3 COMPONENTS Interpreter Development NumPy REQUIRED)
+endif()
 
-add_library(data-driven-mpc STATIC
-    src/ddmpc.cpp
-    src/hankel-matrix.cpp
-    src/osqp-solver.cpp
-)
+add_subdirectory(src)
+if(ENABLE_TESTING)
+    add_subdirectory(test)
 
-target_link_libraries(data-driven-mpc
-        Eigen3::Eigen
-        osqp::osqp
-)
-
-add_executable(simpleExample examples/simpleExample.cpp)
-
-target_link_libraries(simpleExample
-    data-driven-mpc
-)
-
-# Add include directories for the EXECUTABLE
-target_include_directories(simpleExample
-    PRIVATE
-        ${CMAKE_CURRENT_SOURCE_DIR}/include
-        ${EIGEN3_INCLUDE_DIR}
-        ${OSQP_INCLUDE_DIRS}
-)
-
-# Optional: Create an install target
-install(TARGETS data-driven-mpc
-    LIBRARY DESTINATION lib
-    ARCHIVE DESTINATION lib
-    RUNTIME DESTINATION bin
-    INCLUDES DESTINATION include
-)
-install(DIRECTORY include/ DESTINATION include)
+endif()
+if(ENABLE_PYTHON)
+    add_subdirectory(python)
+endif()
+if(ENABLE_EXAMPLES)
+    add_subdirectory(examples)
+endif()

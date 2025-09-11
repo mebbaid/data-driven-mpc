@@ -1,5 +1,7 @@
-#include "data-driven-mpc.h"
+#include "data-driven-mpc/data-driven-mpc.h"
 #include <iostream>
+
+#include <Eigen/QR>
 
 namespace DataDrivenMPC
 {
@@ -52,25 +54,55 @@ namespace DataDrivenMPC
 
     bool HankelMatrix::isPersistentlyExciting(int order, double tolerance) const
     {
+        // --- Input Validation ---
+        int max_possible_rank = std::min(m_hankelMatrix.rows(), m_hankelMatrix.cols());
+        if (order < 0)
+        {
+            throw std::invalid_argument("Required rank ('order') cannot be negative.");
+        }
+
         if (order > m_hankelMatrix.rows())
         {
-            throw std::invalid_argument("Order for persistency of excitation check cannot exceed Hankel matrix row dimension.");
+            std::cerr << "Warning: Requested order (" << order
+                      << ") for PE check exceeds Hankel matrix row dimension ("
+                      << m_hankelMatrix.rows() << "). This check might not be meaningful." << std::endl;
+            // Depending on interpretation, you might throw or just return false here
         }
-        // Use SVD to check for persistent excitation
-        Eigen::JacobiSVD<Eigen::MatrixXd> svd(m_hankelMatrix, Eigen::ComputeThinU | Eigen::ComputeThinV);
-        const Eigen::VectorXd &singularValues = svd.singularValues();
 
-        // Count the number of singular values above the tolerance
-        int count = 0;
-        for (int i = 0; i < singularValues.size(); ++i)
+        if (tolerance <= 0.0)
         {
-            if (singularValues(i) > tolerance)
+            throw std::invalid_argument("Tolerance for PE check must be positive.");
+        }
+
+        // Handle empty matrix case
+        if (m_hankelMatrix.rows() == 0 || m_hankelMatrix.cols() == 0)
+        {
+            // An empty matrix has rank 0. It's PE only if the required rank is 0.
+            return (order == 0);
+        }
+
+        // --- Use ColPivHouseholderQR for Rank Computation ---
+        Eigen::ColPivHouseholderQR<Eigen::MatrixXd> qr(m_hankelMatrix);
+
+        // Get the absolute values of the diagonal elements of the R factor.
+        // The rank is the number of diagonal elements whose magnitude is > tolerance.
+        // Eigen's internal representation might store R differently, but diagonal() on matrixQR() gives access.
+        // Size of diagonal is min(rows, cols).
+        const auto &R_diag_abs = qr.matrixQR().diagonal().cwiseAbs();
+
+        // Count the number of diagonal elements above the *absolute* tolerance
+
+        int computed_rank = 0;
+        for (int i = 0; i < R_diag_abs.size(); ++i)
+        {
+            if (R_diag_abs(i) > tolerance)
             {
-                count++;
+                computed_rank++;
             }
         }
 
-        return count >= order;
+        // Check if the computed rank meets the required rank 'order'
+        return computed_rank >= order;
     }
 
 } // namespace DataDrivenMPC
