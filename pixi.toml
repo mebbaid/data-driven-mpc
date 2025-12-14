@@ -1,0 +1,40 @@
+[project]
+name = "data-driven-mpc"
+version = "0.1.0"
+description = "cpp Implementation of data enabled predictive control DeePC algorithm with tests, examples and python bindings."
+authors = ["Mohamed Elobaid <mohamed.elobaid@kaust.edu.sa>"]
+channels = ["https://prefix.dev/conda-forge"]
+platforms = ["linux-64", "linux-aarch64", "osx-64", "osx-arm64"]
+
+[dependencies]
+python = ">=3.9"
+numpy = "*"
+matplotlib = "*"
+scipy = "*"
+pandas = "*"
+pybind11 = "*"
+
+cxx-compiler = "*"
+cmake = "*"
+make = "*"
+
+eigen = "*"
+osqp = "*"
+qpsolvers-eigen = "*"
+
+
+[tasks]
+build = "cmake -S . -B build -DENABLE_EXAMPLES=ON -DCMAKE_INSTALL_PREFIX=./build/install && cmake --build build --target install -j"
+
+simple-example-run = { cmd = "./build/examples/simpleExample", depends-on = ["build"] }
+simple-example = { cmd = "python examples/plotting_results.py", depends-on = ["simple-example-run"] }
+
+lipm-example-run = { cmd = "./build/examples/lipmExample", depends-on = ["build"] }
+lipm-example = { cmd = "python examples/plotLIPMexample.py", depends-on = ["lipm-example-run"] }
+
+# Python bindings and examples
+build-python = "cmake -S . -B build -DENABLE_PYTHON=ON -DENABLE_EXAMPLES=ON -DCMAKE_INSTALL_PREFIX=./build/install && cmake --build build --target install -j"
+simple-example-python = { cmd = "python examples/simpleExample.py", depends-on = ["build-python"], env = { PYTHONPATH = "build/python/bindings:$PYTHONPATH" } }
+
+# Clean
+clean = "rm -rf build"

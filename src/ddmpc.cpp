@@ -420,7 +420,7 @@ namespace DataDrivenMPC
 
         auto end = std::chrono::high_resolution_clock::now();
         std::chrono::duration<double> elapsed = end - start;
-        std::cerr << "Elapsed time: " << elapsed.count() * 1000.0 << " ms" << std::endl;
+        // std::cerr << "Elapsed time: " << elapsed.count() * 1000.0 << " ms" << std::endl;
 
         // Return the first optimal input in physical units
 
