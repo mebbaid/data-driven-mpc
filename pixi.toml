@@ -1,7 +1,7 @@
 [project]
 name = "data-driven-mpc"
 version = "0.1.0"
-description = "cpp Implementation of data enabled predictive control DeePC algorithm with tests, examples and python bindings."
+description = "C++ Implementation of data enabled predictive control DeePC algorithm with tests, examples and python bindings."
 authors = ["Mohamed Elobaid <mohamed.elobaid@kaust.edu.sa>"]
 channels = ["https://prefix.dev/conda-forge"]
 platforms = ["linux-64", "linux-aarch64", "osx-64", "osx-arm64"]
