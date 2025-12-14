@@ -5,7 +5,7 @@ This C++ library implements the Data-enabled Predictive Control (DeePC) algorith
 
 It computes control actions for a system based purely on previously collected input/output data, without requiring an explicit system model, by solving a Quadratic Program (QP) at each time step.
 
-## Dependency
+## Dependencies
 
 This project uses [pixi](https://prefix.dev/docs/pixi) for environment and dependency management. You can install pixi by following [this installation guide](https://pixi.sh/latest/installation/).
 
