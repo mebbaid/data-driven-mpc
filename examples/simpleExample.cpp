@@ -131,11 +131,11 @@ int main() {
             // Time-Varying Q and R
             std::vector<Eigen::MatrixXd> Q_vec(predictionHorizon, Q);
             std::vector<Eigen::MatrixXd> R_vec(predictionHorizon, R);
-            for (int i = 0; i < predictionHorizon; ++i) {
-                if (i >= 3 && i <= 6) { Q_vec[i] *= 5.0; }
-                else { Q_vec[i] *= 0.2; }
-                 R_vec[i] *= 0.1;
-            }
+            // for (int i = 0; i < predictionHorizon; ++i) {
+            //     if (i >= 3 && i <= 6) { Q_vec[i] *= 5.0; }
+            //     else { Q_vec[i] *= 0.2; }
+            //      R_vec[i] *= 0.1;
+            // }
             controller.updateWeights(Q_vec, R_vec);
 
             // Solve MPC
@@ -148,7 +148,7 @@ int main() {
 
             // Store Results (in memory)
             time_vec.push_back(static_cast<double>(k)); // Store time as double
-            y_vec.push_back(y_next_sim(0));
+            y_vec.push_back(current_sim_y(0));
             u_vec.push_back(u_opt(0));
             ref_vec.push_back(reference(0));
 

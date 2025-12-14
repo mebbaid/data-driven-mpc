@@ -5,49 +5,34 @@ This C++ library implements the Data-enabled Predictive Control (DeePC) algorith
 
 It computes control actions for a system based purely on previously collected input/output data, without requiring an explicit system model, by solving a Quadratic Program (QP) at each time step.
 
-### Dependencies
+## Dependencies
 
-**Mandatory:**
+This project uses [pixi](https://prefix.dev/docs/pixi) for environment and dependency management. You can install pixi by following [this installation guide](https://pixi.sh/latest/installation/).
 
-*   **CMake** (>= 3.15): For building the project.
-*   **C++17 Compiler**: A compiler supporting C++17 standard (e.g., GCC, Clang, MSVC).
-*   **Eigen3**: Library for linear algebra.
-    ```bash
-    # Example (Ubuntu/Debian)
-    sudo apt-get update && sudo apt-get install libeigen3-dev
-    ```
-*   **qp-solvers-eigen**: A C++ wrapper for various QP solvers.
-    *   Follow installation instructions: [https://github.com/ami-iit/qpsolvers-eigen](https://github.com/ami-iit/qpsolvers-eigen)
-    *   This library *itself* requires at least one backend QP solver to be installed (e.g., OSQP or PROXQP).
-*   **A QP Solver**: At least one solver compatible with `qp-solvers-eigen`.
-    *   **OSQP**: Recommended for performance in many MPC tasks. Follow [OSQP Installation Guide](https://osqp.org/docs/get_started).
-    *   **PROXQP**: Another option. Follow [PROXQP Installation Guide](https://github.com/Simple-Robotics/proxsuite).
+## Usage
 
-**Optional (for Python Bindings):**
+> [!IMPORTANT]
+> The installation has been tested only on Ubuntu and macOS systems.
 
-*   **Python 3** (Interpreter & Development Headers): Required to build the Python module.
-    ```bash
-    # Example (Ubuntu/Debian)
-    sudo apt-get update && sudo apt-get install python3 python3-dev
-    ```
-*   **NumPy**: Python package for numerical operations (used for Eigen interaction).
-    ```bash
-    pip install numpy
-    ```
-*   **pybind11**: Header-only library for creating Python bindings. It's often included as a submodule or fetched by CMake. If not, install it:
-    ```bash
-    pip install pybind11
-    ```
+To run the C++ simple example, execute in the terminal the command:
 
-### Build and Installation
+```bash
+pixi run simple-example
+```
 
-1.  **Clone the repository:**
-    ```bash
-    git clone <repository-url>
-    cd <repository-directory>
-    mkdir build && cd build
-    cmake .. -DCMAKE_INSTALL_PREFIX=../install && cmake --build . --target install -j
-    ```
+To run the C++ LIPM example:
+
+```bash
+pixi run lipm-example
+```
+
+To run the Python simple example:
+
+```bash
+pixi run simple-example-python
+```
+
+This will install all dependencies and build the project automatically.
 
 
 ### Problem Solved
@@ -227,6 +212,19 @@ except Exception as e:
     # --- Handle solver failure ---
     print(f"Error during solve: {e}")
 ```
+
+## Maintainers
+
+<table>
+  <tr>
+    <td align="center">
+      <a href="https://github.com/mebbaid">
+        <img src="https://github.com/mebbaid.png" width="80" alt="Mohamed Elobaid"><br>
+        👨‍💻 Mohamed Elobaid
+      </a>
+    </td>
+  </tr>
+</table>
 
 ### License
 Copyright (c) 2025, Italian Institute of Technology
